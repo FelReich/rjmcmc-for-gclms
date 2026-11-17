@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from collections import Counter
 from dataclasses import dataclass
 import numpy as np
 
@@ -206,42 +205,6 @@ class BaseRJMCMC:
             by_move[name] = sum(selected) / len(selected) if selected else None
         return {"overall": overall, "by_move": by_move}
 
-    def mixing_diagnostics(self, statistic=None, burn_in=0, model_index=None):
-        """Summarize a scalar trace and, when available, model visits."""
-        self._check_burn_in(burn_in)
-        # states[0] is the initial state; outcomes[0] produces states[1].
-        values = self._trace_values(statistic)[burn_in + 1:]
-        n = len(values)
-        centered = values - values.mean()
-        result = {
-            "draws": n,
-            "mean": float(values.mean()),
-            "lag1_autocorrelation": None,
-        }
-        variance_sum = np.dot(centered, centered)
-        if n > 1 and variance_sum > 0:
-            result["lag1_autocorrelation"] = float(
-                np.dot(centered[:-1], centered[1:]) / variance_sum
-            )
-
-        retained_states = self.states[burn_in + 1:]
-        if model_index is not None or all(
-            hasattr(state, "k") for state in retained_states
-        ):
-            labels = [
-                model_index(state) if model_index is not None else state.k
-                for state in retained_states
-            ]
-            result["model_switch_rate"] = (
-                sum(a != b for a, b in zip(labels[:-1], labels[1:])) / (n - 1)
-                if n > 1 else None
-            )
-            counts = Counter(labels)
-            result["model_index_frequencies"] = {
-                index: count / n for index, count in counts.items()
-            }
-        return result
-
     @staticmethod
     def two_way_anova(chains, statistic, models=None, burn_in=0, model_index=None):
         """Brooks-Giudici variance comparisons for multiple state histories.
@@ -397,40 +360,4 @@ class BaseRJMCMC:
                 "W_m_over_W_m_W_c": ratio(w_m, w_m_w_c),
                 "B_m_over_B_m_W_c": ratio(b_m, b_m_w_c),
             },
-        }
-
-    def evaluate(
-        self, statistic=None, burn_in=0, trace_path=None, chains=None,
-        models=None, model_index=None,
-    ):
-        """Return run summaries; use supplied histories for two-way ANOVA.
-
-        chains, when provided, contains all histories including self.states.
-        At least two chains and a cross-model scalar statistic are required.
-        """
-        self._check_burn_in(burn_in)
-        if chains is not None and statistic is None:
-            raise ValueError("Provide statistic for two-way ANOVA")
-        anova = (
-            self.two_way_anova(
-                chains, statistic, models=models, burn_in=burn_in,
-                model_index=model_index,
-            )
-            if chains is not None else None
-        )
-        return {
-            "iterations": {
-                "total": len(self.move_outcomes),
-                "burn_in": burn_in,
-                "retained": len(self.move_outcomes) - burn_in,
-                "chains": anova["n_chains"] if anova is not None else 1,
-            },
-            "acceptance_rate": self.acceptance_rate(burn_in=burn_in),
-            "mixing": self.mixing_diagnostics(
-                statistic=statistic, burn_in=burn_in, model_index=model_index
-            ),
-            "two_way_anova": anova,
-            "trace_plot": self.trace_plot(
-                statistic=statistic, burn_in=burn_in, save_path=trace_path
-            ),
         }

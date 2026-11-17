@@ -82,6 +82,22 @@ class Graph:
             (i, j) for i, j in self.ordered_edges if (j, i) not in self.edges
         )
 
+    def cycle_birth_pairs(self) -> tuple[tuple[int, int], ...]:
+        """Unconnected vertex pairs to which both directions can be added."""
+        return tuple(
+            (i, j)
+            for i in range(self.p) for j in range(i + 1, self.p)
+            if (i, j) not in self.edges and (j, i) not in self.edges
+        )
+
+    def cycle_death_pairs(self) -> tuple[tuple[int, int], ...]:
+        """Vertex pairs currently joined in both directions."""
+        return tuple(
+            (i, j)
+            for i in range(self.p) for j in range(i + 1, self.p)
+            if (i, j) in self.edges and (j, i) in self.edges
+        )
+
     def add_edge(self, edge: tuple[int, int], simple: bool = False) -> "Graph":
         """Return a new graph with an admissible edge added."""
         if edge not in self.birth_edges(simple=simple):

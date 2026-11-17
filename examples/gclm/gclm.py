@@ -78,6 +78,23 @@ class GCLMCalculations:
         # The first three items also identify H, which is unchanged by eta.
         return (state.graph, state.r.tobytes(), state.b.tobytes(), state.eta)
 
+    def _construct_H(self, state: State) -> np.ndarray:
+        H = np.diag(self.contrast_basis @ state.r)
+        for (i, j), coefficient in zip(state.graph.ordered_edges, state.b):
+            H[j, i] = coefficient
+        return H
+
+    def spectral_abscissa(self, state: State) -> float:
+        """Return phi(H) without solving a Lyapunov equation for a proposal."""
+        key = self._drift_key(state)
+        for cached in (self._current, self._proposed):
+            if cached is not None and cached.key[:3] == key[:3]:
+                return cached.spectral_abscissa
+        eigenvalues = eigvals(self._construct_H(state))
+        if not np.all(np.isfinite(eigenvalues)):
+            raise np.linalg.LinAlgError("Could not compute finite eigenvalues of H")
+        return float(np.max(eigenvalues.real))
+
     def drift(self, state: State, *, proposed=False) -> DriftCalculation:
         """Return H, phi(H), M, Sigma, and reusable likelihood quantities."""
         if not isinstance(state, State):
@@ -109,9 +126,7 @@ class GCLMCalculations:
             H = shared_H.H
             spectral_abscissa = shared_H.spectral_abscissa
         else:
-            H = np.diag(self.contrast_basis @ state.r)
-            for (i, j), coefficient in zip(state.graph.ordered_edges, state.b):
-                H[j, i] = coefficient
+            H = self._construct_H(state)
             eigenvalues = eigvals(H)
             if not np.all(np.isfinite(eigenvalues)):
                 raise np.linalg.LinAlgError("Could not compute finite eigenvalues of H")
@@ -188,6 +203,7 @@ class GCLMCalculations:
 _MOVE_NAMES = (
     "mean", "contrast", "margin", "coefficient", "reversal", "birth", "death",
 )
+_CYCLE_MOVE_NAMES = ("cycle_birth", "cycle_death")
 
 
 @dataclass(frozen=True)
@@ -223,13 +239,19 @@ class GCLMPriorConfig:
 
 @dataclass(frozen=True, eq=False)
 class GCLMProposalConfig:
-    """Proposal scales, coefficient-selection probability, and move weights."""
+    """Proposal scales, optional extensions, and move weights.
+
+    Both extensions default to off. Cycle moves are restricted to general
+    graphs; when adaptive_margin is off, they leave eta unchanged.
+    """
 
     sigma_r: float
     sigma_eta: float
     sigma_b: float
     gamma: float
     move_weights: Mapping[str, float] | None = None
+    adaptive_margin: bool = False
+    cycle_moves: bool = False
 
     def __post_init__(self):
         for name in ("sigma_r", "sigma_eta", "sigma_b"):
@@ -241,17 +263,25 @@ class GCLMProposalConfig:
             raise ValueError("gamma must lie in (0, 1]")
         object.__setattr__(self, "gamma", float(self.gamma))
 
+        if not isinstance(self.adaptive_margin, (bool, np.bool_)):
+            raise TypeError("adaptive_margin must be a boolean")
+        if not isinstance(self.cycle_moves, (bool, np.bool_)):
+            raise TypeError("cycle_moves must be a boolean")
+        object.__setattr__(self, "adaptive_margin", bool(self.adaptive_margin))
+        object.__setattr__(self, "cycle_moves", bool(self.cycle_moves))
+
+        names = _MOVE_NAMES + (_CYCLE_MOVE_NAMES if self.cycle_moves else ())
         weights = (
-            {name: 1.0 for name in _MOVE_NAMES}
+            {name: 1.0 for name in names}
             if self.move_weights is None else self.move_weights
         )
-        if not isinstance(weights, Mapping) or set(weights) != set(_MOVE_NAMES):
-            raise ValueError("Give a base weight for every GCLM move")
+        if not isinstance(weights, Mapping) or set(weights) != set(names):
+            raise ValueError("Give a base weight for every enabled GCLM move")
         if any(not np.isfinite(weight) or weight <= 0 for weight in weights.values()):
             raise ValueError("Base move weights must be finite and positive")
         # Copy before freezing so changes to the input dictionary cannot leak in.
         frozen_weights = MappingProxyType({
-            name: float(weights[name]) for name in _MOVE_NAMES
+            name: float(weights[name]) for name in names
         })
         object.__setattr__(self, "move_weights", frozen_weights)
 
@@ -283,8 +313,14 @@ class GCLM(BaseRJMCMC):
             raise TypeError("prior_config must be a GCLMPriorConfig")
         if not isinstance(proposal_config, GCLMProposalConfig):
             raise TypeError("proposal_config must be a GCLMProposalConfig")
-        if set(moves) != set(self.MOVE_NAMES):
-            raise ValueError("Provide every GCLM move exactly once")
+        if proposal_config.cycle_moves and prior_config.graph_space != "general":
+            raise ValueError("Cycle moves require the general graph space")
+        enabled_names = self.MOVE_NAMES + (
+            _CYCLE_MOVE_NAMES if proposal_config.cycle_moves else ()
+        )
+        if set(moves) != set(enabled_names):
+            raise ValueError("Provide every enabled GCLM move exactly once")
+        self.enabled_move_names = enabled_names
         for name, move in moves.items():
             if getattr(move, "calculations", None) is not calculations:
                 raise ValueError(f"{name} move must use the shared calculations")
@@ -322,7 +358,7 @@ class GCLM(BaseRJMCMC):
         )
         rho = graph.k / max_edges
         weights = self.proposal_config.move_weights
-        return {
+        result = {
             "mean": weights["mean"],
             "contrast": weights["contrast"],
             "margin": weights["margin"],
@@ -335,6 +371,16 @@ class GCLM(BaseRJMCMC):
             "birth": (1.0 - rho) * weights["birth"],
             "death": rho * weights["death"],
         }
+        if self.proposal_config.cycle_moves:
+            result["cycle_birth"] = (
+                (1.0 - rho) * weights["cycle_birth"]
+                if graph.cycle_birth_pairs() else 0.0
+            )
+            result["cycle_death"] = (
+                rho * weights["cycle_death"]
+                if graph.cycle_death_pairs() else 0.0
+            )
+        return result
 
     def step(self, state=None):
         """Advance the stored state and keep the drift cache in sync."""

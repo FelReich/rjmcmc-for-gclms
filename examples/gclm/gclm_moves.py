@@ -1,4 +1,4 @@
-"""The seven moves for the graphical continuous Lyapunov model sampler.
+"""The GCLM moves, with optional adaptive margins and two-edge cycle moves.
 
 Each move implements its simplified acceptance ratio in the coordinates
 (G, mu, r, eta, b_G). The sampler supplies move-selection probabilities.
@@ -45,6 +45,41 @@ class _GCLMMove(BaseMove):
         except np.linalg.LinAlgError:
             return -np.inf
         return new - old
+
+    def _adjust_margin(self, state: State, proposed: State) -> State | None:
+        """Apply the reversible softplus margin shift, if enabled."""
+        if not self.proposal.adaptive_margin:
+            return proposed
+        try:
+            old_phi = self.calculations.spectral_abscissa(state)
+            new_phi = self.calculations.spectral_abscissa(proposed)
+        except np.linalg.LinAlgError:
+            return None
+        eta = state.eta
+        # softplus^{-1}(eta) = eta + log(1 - exp(-eta)).
+        z = eta + np.log(-np.expm1(-eta))
+        new_z = z + old_phi - new_phi
+        # softplus(new_z) = log(1 + exp(new_z)).
+        new_eta = float(np.logaddexp(0.0, new_z))
+        if not np.isfinite(new_eta) or new_eta <= 0.0:
+            return None
+        return replace(proposed, eta=new_eta)
+
+    def _log_margin_proposal_ratio(self, old_eta: float, new_eta: float) -> float:
+        """Log prior-density ratio plus log softplus Jacobian."""
+        if not self.proposal.adaptive_margin:
+            return 0.0
+        old_log = log(old_eta)
+        new_log = log(new_eta)
+        log_prior_ratio = old_log - new_log - (
+            (new_log - self.prior.mu_eta) ** 2
+            - (old_log - self.prior.mu_eta) ** 2
+        ) / (2.0 * self.prior.s_eta ** 2)
+        # s'(softplus^{-1}(eta)) = 1 - exp(-eta).
+        log_jacobian = (
+            np.log(-np.expm1(-new_eta)) - np.log(-np.expm1(-old_eta))
+        )
+        return float(log_prior_ratio + log_jacobian)
 
 
 class MeanMove(_GCLMMove):
@@ -193,6 +228,9 @@ class ReversalMove(_GCLMMove):
         proposed = State.from_coefficients(
             graph, state.mu, state.r, state.eta, coefficients
         )
+        proposed = self._adjust_margin(state, proposed)
+        if proposed is None:
+            return Proposal(state, "reversal")
         return Proposal(proposed, "reversal", u=edge)
 
     def acceptance(
@@ -200,8 +238,12 @@ class ReversalMove(_GCLMMove):
     ):
         if proposal.u is None:
             return False
-        # Graph prior, move/edge choice, and coefficient prior/proposal cancel.
-        return _accept(self._log_likelihood_ratio(state, proposal.state), rng)
+        # Graph and coefficient prior/proposal factors cancel in this space.
+        log_ratio = self._log_likelihood_ratio(state, proposal.state)
+        log_ratio += self._log_margin_proposal_ratio(
+            state.eta, proposal.state.eta
+        )
+        return _accept(log_ratio, rng)
 
 
 class BirthMove(_GCLMMove):
@@ -225,6 +267,9 @@ class BirthMove(_GCLMMove):
         proposed = State.from_coefficients(
             graph, state.mu, state.r, state.eta, coefficients
         )
+        proposed = self._adjust_margin(state, proposed)
+        if proposed is None:
+            return Proposal(state, "birth")
         return Proposal(proposed, "death", u=edge)
 
     def acceptance(
@@ -235,6 +280,9 @@ class BirthMove(_GCLMMove):
         log_ratio = self._log_likelihood_ratio(state, proposal.state)
         log_ratio += log(self.prior.lambda_p) - log(state.graph.k + 1)
         log_ratio += log(reverse_probability) - log(forward_probability)
+        log_ratio += self._log_margin_proposal_ratio(
+            state.eta, proposal.state.eta
+        )
         return _accept(log_ratio, rng)
 
 
@@ -253,12 +301,111 @@ class DeathMove(_GCLMMove):
         proposed = State.from_coefficients(
             graph, state.mu, state.r, state.eta, coefficients
         )
+        proposed = self._adjust_margin(state, proposed)
+        if proposed is None:
+            return Proposal(state, "death")
         return Proposal(proposed, "birth", u=edge)
 
     def acceptance(
         self, state, proposal, forward_probability, reverse_probability, rng
     ):
+        if proposal.u is None:
+            return False
         log_ratio = self._log_likelihood_ratio(state, proposal.state)
         log_ratio += log(state.graph.k) - log(self.prior.lambda_p)
         log_ratio += log(reverse_probability) - log(forward_probability)
+        log_ratio += self._log_margin_proposal_ratio(
+            state.eta, proposal.state.eta
+        )
+        return _accept(log_ratio, rng)
+
+
+class CycleBirthMove(_GCLMMove):
+    """Add both directions of an unconnected pair in the general graph space."""
+
+    def available(self, state):
+        return self.prior.graph_space == "general" and bool(
+            state.graph.cycle_birth_pairs()
+        )
+
+    def propose(self, state: State, rng: np.random.Generator) -> Proposal:
+        pairs = state.graph.cycle_birth_pairs()
+        i, j = pairs[int(rng.integers(len(pairs)))]
+        new_b = rng.normal(0.0, self.prior.tau, size=2)
+        if not np.all(np.isfinite(new_b)):
+            return Proposal(state, "cycle_birth")
+        graph = state.graph.add_edge((i, j)).add_edge((j, i))
+        coefficients = state.coefficients_by_edge
+        coefficients[i, j], coefficients[j, i] = new_b
+        proposed = State.from_coefficients(
+            graph, state.mu, state.r, state.eta, coefficients
+        )
+        proposed = self._adjust_margin(state, proposed)
+        if proposed is None:
+            return Proposal(state, "cycle_birth")
+        return Proposal(proposed, "cycle_death", u=(i, j))
+
+    def acceptance(
+        self, state, proposal, forward_probability, reverse_probability, rng
+    ):
+        if proposal.u is None:
+            return False
+        available_edges = state.graph.p * (state.graph.p - 1) - state.graph.k
+        log_ratio = self._log_likelihood_ratio(state, proposal.state)
+        # Poisson graph-size prior, uniform graphs at each size; the two
+        # coefficient priors cancel their independent proposal densities.
+        log_ratio += 2 * log(self.prior.lambda_p)
+        log_ratio -= log(available_edges) + log(available_edges - 1)
+        log_ratio += log(reverse_probability) - log(forward_probability)
+        log_ratio += (
+            log(len(state.graph.cycle_birth_pairs()))
+            - log(len(proposal.state.graph.cycle_death_pairs()))
+        )
+        log_ratio += self._log_margin_proposal_ratio(
+            state.eta, proposal.state.eta
+        )
+        return _accept(log_ratio, rng)
+
+
+class CycleDeathMove(_GCLMMove):
+    """Remove both directions of a two-cycle in the general graph space."""
+
+    def available(self, state):
+        return self.prior.graph_space == "general" and bool(
+            state.graph.cycle_death_pairs()
+        )
+
+    def propose(self, state: State, rng: np.random.Generator) -> Proposal:
+        pairs = state.graph.cycle_death_pairs()
+        i, j = pairs[int(rng.integers(len(pairs)))]
+        graph = state.graph.remove_edge((i, j)).remove_edge((j, i))
+        coefficients = state.coefficients_by_edge
+        del coefficients[i, j]
+        del coefficients[j, i]
+        proposed = State.from_coefficients(
+            graph, state.mu, state.r, state.eta, coefficients
+        )
+        proposed = self._adjust_margin(state, proposed)
+        if proposed is None:
+            return Proposal(state, "cycle_death")
+        return Proposal(proposed, "cycle_birth", u=(i, j))
+
+    def acceptance(
+        self, state, proposal, forward_probability, reverse_probability, rng
+    ):
+        if proposal.u is None:
+            return False
+        available_edges = state.graph.p * (state.graph.p - 1) - state.graph.k
+        log_ratio = self._log_likelihood_ratio(state, proposal.state)
+        # Reciprocal graph-prior and pair-selection factors of cycle birth.
+        log_ratio += log(available_edges + 1) + log(available_edges + 2)
+        log_ratio -= 2 * log(self.prior.lambda_p)
+        log_ratio += log(reverse_probability) - log(forward_probability)
+        log_ratio += (
+            log(len(state.graph.cycle_death_pairs()))
+            - log(len(proposal.state.graph.cycle_birth_pairs()))
+        )
+        log_ratio += self._log_margin_proposal_ratio(
+            state.eta, proposal.state.eta
+        )
         return _accept(log_ratio, rng)

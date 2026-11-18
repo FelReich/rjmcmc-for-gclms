@@ -216,24 +216,24 @@ def _five_seeds(first_seed: int) -> tuple[int, ...]:
 def get_simulation_cases() -> tuple[SimulationCase, ...]:
     """Return all 11 immutable configurations in the requested order."""
     return (
-        _case(_G2, 800, 5.0, "general", _five_seeds(202610066)),
-        _case(_G2, 800, 5.0, "simple", _five_seeds(202610061)),
-        _case(_G2, 800, 2.0, "general", _five_seeds(202611001)),
-        _case(_G2, 800, 2.0, "simple", _five_seeds(202611006)),
-        _case(_G2, 50, 5.0, "general", _five_seeds(202610006)),
-        _case(_G2, 50, 5.0, "simple", _five_seeds(202610001)),
-        _case(_G8, 800, 5.0, "general", _five_seeds(202610086)),
-        _case(_G8, 800, 5.0, "simple", _five_seeds(202610081)),
+        _case(_G2, 800, 5.0, "general", _five_seeds(2026000)),
+        _case(_G2, 800, 5.0, "simple", _five_seeds(2026005)),
+        _case(_G2, 800, 2.0, "general", _five_seeds(2026010)),
+        _case(_G2, 800, 2.0, "simple", _five_seeds(2026015)),
+        _case(_G2, 50, 5.0, "general", _five_seeds(2026020)),
+        _case(_G2, 50, 5.0, "simple", _five_seeds(2026025)),
+        _case(_G8, 800, 5.0, "general", _five_seeds(2026030)),
+        _case(_G8, 800, 5.0, "simple", _five_seeds(2026035)),
         _case(
-            _G2, 800, 5.0, "general", _five_seeds(202611011),
+            _G2, 800, 5.0, "general", _five_seeds(2026040),
             adaptive_margin=True,
         ),
         _case(
-            _G2, 800, 5.0, "simple", _five_seeds(202611016),
+            _G2, 800, 5.0, "simple", _five_seeds(2026045),
             adaptive_margin=True,
         ),
         _case(
-            _G2, 800, 5.0, "general", _five_seeds(202611021),
+            _G2, 800, 5.0, "general", _five_seeds(2026050),
             adaptive_margin=True, cycle_moves=True,
         ),
     )

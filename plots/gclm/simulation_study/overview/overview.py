@@ -6,6 +6,8 @@ From the Code directory:
 Each case gets overview.csv (five chains and a pooled row) and trace_plots.pdf.
 Acceptance rates and all summaries use retained, post-burn-in draws only.
 The stored log-likelihood is the total log-likelihood up to a constant.
+ESS is ArviZ's bulk ESS; R-hat is its rank-normalized split/folded diagnostic.
+Each chain has its own ESS; pooled ESS and R-hat use all five chains.
 """
 
 import argparse
@@ -18,6 +20,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+import arviz as az
 import numpy as np
 import pandas as pd
 
@@ -54,7 +57,7 @@ def true_graph_bitmask(case):
                if edge in case.generating_model.ordered_edges)
 
 
-def read_chain(path, case, chain_number, seed, keep_trace):
+def read_chain(path, case, chain_number, seed):
     if not path.is_file():
         raise FileNotFoundError(f"Missing completed chain: {path}")
     with path.open(newline="", encoding="utf-8") as file:
@@ -64,7 +67,7 @@ def read_chain(path, case, chain_number, seed, keep_trace):
         raise ValueError(f"Chain metadata do not match settings: {path}")
 
     totals = empty_totals()
-    trace = {name: [] for name in QUANTITIES} if keep_trace else None
+    trace = {name: [] for name in QUANTITIES}
     true_k = len(case.generating_model.ordered_edges)
     bitmask = true_graph_bitmask(case)
     for chunk in pd.read_csv(path, usecols=READ_COLUMNS, chunksize=100_000):
@@ -78,15 +81,13 @@ def read_chain(path, case, chain_number, seed, keep_trace):
         totals["graph_changed"] += int(chunk["graph_changed"].sum())
         totals["true_k"] += int((chunk["k"] == true_k).sum())
         totals["true_graph"] += int((chunk["graph_bitmask"] == bitmask).sum())
-        if keep_trace:
-            for index, name in enumerate(QUANTITIES):
-                trace[name].append(values[:, index].copy())
+        for index, name in enumerate(QUANTITIES):
+            trace[name].append(values[:, index].copy())
 
     expected = (case.iterations - case.burn_in + case.thinning - 1) // case.thinning
     if totals["draws"] != expected:
         raise ValueError(f"{path} has {totals['draws']} draws; expected {expected}")
-    if keep_trace:
-        trace = {name: np.concatenate(parts) for name, parts in trace.items()}
+    trace = {name: np.concatenate(parts) for name, parts in trace.items()}
     return totals, trace
 
 
@@ -111,7 +112,15 @@ def summary_row(case, label, seed, totals):
     for index, name in enumerate(QUANTITIES):
         row[f"mean_{name}"] = means[index]
         row[f"sd_{name}"] = np.sqrt(variances[index])
+        row[f"ess_bulk_{name}"] = ""
+        row[f"rhat_rank_{name}"] = ""  # Requires multiple chains.
     return row
+
+
+def diagnostic_value(value):
+    """Leave an undefined diagnostic blank in the CSV."""
+    value = float(value)
+    return value if np.isfinite(value) else ""
 
 
 def plot_trace(case, trace, destination):
@@ -137,23 +146,36 @@ def process_case(case):
     folder = HERE / case.id
     rows = []
     pooled = empty_totals()
-    first_trace = None
+    chain_traces = []
     for chain_number, seed in enumerate(case.chain_seeds, start=1):
         path = RUNS / case.id / f"chain_{chain_number:02d}.csv"
-        totals, trace = read_chain(path, case, chain_number, seed,
-                                   keep_trace=(chain_number == 1))
+        totals, trace = read_chain(path, case, chain_number, seed)
         add_totals(pooled, totals)
-        rows.append(summary_row(case, chain_number, seed, totals))
-        if trace is not None:
-            first_trace = trace
-    rows.append(summary_row(case, "pooled", "", pooled))
+        row = summary_row(case, chain_number, seed, totals)
+        for name in QUANTITIES:
+            row[f"ess_bulk_{name}"] = diagnostic_value(
+                az.ess(trace[name][None, :], method="bulk")
+            )
+        rows.append(row)
+        chain_traces.append(trace)
+
+    pooled_row = summary_row(case, "pooled", "", pooled)
+    for name in QUANTITIES:
+        values = np.stack([trace[name] for trace in chain_traces])
+        pooled_row[f"ess_bulk_{name}"] = diagnostic_value(
+            az.ess(values, method="bulk")
+        )
+        pooled_row[f"rhat_rank_{name}"] = diagnostic_value(
+            az.rhat(values, method="rank")
+        )
+    rows.append(pooled_row)
 
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / "overview.csv").open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    plot_trace(case, first_trace, folder / "trace_plots.pdf")
+    plot_trace(case, chain_traces[0], folder / "trace_plots.pdf")
     print(f"Saved {folder.name}/overview.csv and trace_plots.pdf", flush=True)
 
 

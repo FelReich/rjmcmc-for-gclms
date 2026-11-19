@@ -8,10 +8,14 @@ Acceptance rates and all summaries use retained, post-burn-in draws only.
 The stored log-likelihood is the total log-likelihood up to a constant.
 ESS is ArviZ's bulk ESS; R-hat is its rank-normalized split/folded diagnostic.
 Each chain has its own ESS; pooled ESS and R-hat use all five chains.
+The true-size prior is a Poisson(lambda_p) truncated to the graph space;
+conditional on k, graphs are uniform. The CSV reports prior probabilities and
+posterior/prior ratios for the true size and the exact true graph.
 """
 
 import argparse
 import csv
+from math import comb, factorial
 from pathlib import Path
 import sys
 
@@ -57,6 +61,28 @@ def true_graph_bitmask(case):
                if edge in case.generating_model.ordered_edges)
 
 
+def true_model_prior_probabilities(case):
+    """Return P(k*) and P(G*) under the sampler's graph prior.
+
+    In the general space there are C(p(p-1), k) directed graphs of size k.
+    In the simple space there are C(p(p-1)/2, k) 2**k graphs: choose the
+    unordered vertex pairs, then orient each chosen pair.
+    """
+    p = case.generating_model.p
+    true_k = len(case.generating_model.ordered_edges)
+    simple = case.prior.graph_space == "simple"
+    max_k = p * (p - 1) // (2 if simple else 1)
+    if not 0 <= true_k <= max_k:
+        raise ValueError(f"True graph size is outside the {case.prior.graph_space} space")
+    if simple and any((j, i) in case.generating_model.ordered_edges
+                      for i, j in case.generating_model.ordered_edges):
+        raise ValueError("True graph contains a reciprocal pair in the simple space")
+    weights = [case.prior.lambda_p ** k / factorial(k) for k in range(max_k + 1)]
+    prior_k = weights[true_k] / sum(weights)
+    graph_count = comb(max_k, true_k) * (2 ** true_k if simple else 1)
+    return prior_k, prior_k / graph_count
+
+
 def read_chain(path, case, chain_number, seed):
     if not path.is_file():
         raise FileNotFoundError(f"Missing completed chain: {path}")
@@ -93,6 +119,9 @@ def read_chain(path, case, chain_number, seed):
 
 def summary_row(case, label, seed, totals):
     n = totals["draws"]
+    prior_k, prior_graph = true_model_prior_probabilities(case)
+    posterior_k = totals["true_k"] / n
+    posterior_graph = totals["true_graph"] / n
     means = totals["sums"] / n
     variances = np.maximum(
         (totals["squares"] - totals["sums"] ** 2 / n) / (n - 1), 0.0
@@ -106,8 +135,12 @@ def summary_row(case, label, seed, totals):
         "retained_draws": n,
         "acceptance_rate_retained": totals["accepted"] / n,
         "graph_change_rate_retained": totals["graph_changed"] / n,
-        "posterior_p_true_k": totals["true_k"] / n,
-        "posterior_p_true_graph": totals["true_graph"] / n,
+        "posterior_p_true_k": posterior_k,
+        "prior_p_true_k": prior_k,
+        "posterior_prior_ratio_true_k": posterior_k / prior_k,
+        "posterior_p_true_graph": posterior_graph,
+        "prior_p_true_graph": prior_graph,
+        "posterior_prior_ratio_true_graph": posterior_graph / prior_graph,
     }
     for index, name in enumerate(QUANTITIES):
         row[f"mean_{name}"] = means[index]
@@ -129,7 +162,7 @@ def plot_trace(case, trace, destination):
     x = np.arange(1, len(trace["k"]) + 1)
     for axis, name, ylabel in zip(
         axes, QUANTITIES, ("Number of edges $k$", "Stability margin $\\eta$",
-                            "Total log-likelihood"),
+                            "log-likelihood"),
     ):
         axis.plot(x, trace[name], color="#245b8f", linewidth=0.4,
                   rasterized=True)
@@ -142,7 +175,7 @@ def plot_trace(case, trace, destination):
     plt.close(figure)
 
 
-def process_case(case):
+def process_case(case, *, csv_only=False):
     folder = HERE / case.id
     rows = []
     pooled = empty_totals()
@@ -175,8 +208,10 @@ def process_case(case):
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    plot_trace(case, chain_traces[0], folder / "trace_plots.pdf")
-    print(f"Saved {folder.name}/overview.csv and trace_plots.pdf", flush=True)
+    if not csv_only:
+        plot_trace(case, chain_traces[0], folder / "trace_plots.pdf")
+    print(f"Saved {folder.name}/overview.csv" +
+          ("" if csv_only else " and trace_plots.pdf"), flush=True)
 
 
 def main():
@@ -184,10 +219,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=[case.id for case in cases],
                         help="Process one case (default: all 11)")
+    parser.add_argument("--csv-only", action="store_true",
+                        help="Regenerate overview CSVs without replacing trace PDFs")
     args = parser.parse_args()
     for case in cases:
         if args.case is None or case.id == args.case:
-            process_case(case)
+            process_case(case, csv_only=args.csv_only)
 
 
 if __name__ == "__main__":

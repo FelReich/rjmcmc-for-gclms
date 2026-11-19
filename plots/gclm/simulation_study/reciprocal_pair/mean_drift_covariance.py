@@ -3,6 +3,10 @@
 The window uses zero-based retained indices [288000, 331000). The MAP graph
 and overall posterior covariance use all retained draws from all five base
 general chains. Matrix rows are target vertices and columns are sources.
+The covariance likelihoods use the common fitted mean y_bar and omit the
+Gaussian factor (2*pi)^(-n*p/2), matching the sampler's log-likelihood
+convention. They evaluate each reported covariance matrix; they are not
+posterior averages of the draw-wise likelihoods.
 """
 
 import csv
@@ -12,7 +16,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-from scipy.linalg import solve_continuous_lyapunov
+from scipy.linalg import cho_factor, cho_solve, solve_continuous_lyapunov
 
 
 CODE_ROOT = Path(__file__).resolve().parents[4]
@@ -129,6 +133,14 @@ def relative_error(estimate, reference):
                  / np.linalg.norm(reference, ord="fro"))
 
 
+def covariance_log_likelihood(covariance, empirical_covariance, n):
+    """Gaussian log-likelihood at mu=y_bar, omitting the shared normalizer."""
+    factor = cho_factor(covariance, lower=True, check_finite=True)
+    log_determinant = 2.0 * np.log(np.diag(factor[0])).sum()
+    empirical_trace = np.trace(cho_solve(factor, empirical_covariance))
+    return float(-0.5 * n * (log_determinant + empirical_trace))
+
+
 def main():
     (mean_m, mean_sigma, window_draws, map_sigma, map_mask,
      map_draws, posterior_sigma, posterior_draws) = summarize_chains()
@@ -157,12 +169,18 @@ def main():
     columns = ["matrix", "kind", "draws", "chain_number",
                "retained_start_zero_based", "retained_end_exclusive",
                "relative_error_to_true",
-               "relative_error_to_empirical_covariance", "graph_bitmask",
+               "relative_error_to_empirical_covariance",
+               "log_likelihood_at_ybar_up_to_constant",
+               "likelihood_at_ybar_up_to_constant", "graph_bitmask",
                "graph_edges_one_based", "posterior_graph_probability", *entry_columns]
     with OUTPUT.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=columns)
         writer.writeheader()
         for name, kind, matrix, draws in matrices:
+            log_likelihood = (
+                covariance_log_likelihood(matrix, empirical_sigma, CASE.n)
+                if kind == "covariance" else None
+            )
             row = {
                 "matrix": name,
                 "kind": kind,
@@ -174,6 +192,10 @@ def main():
                     matrix, true_m if kind == "drift" else true_sigma),
                 "relative_error_to_empirical_covariance": (
                     relative_error(matrix, empirical_sigma) if kind == "covariance" else ""),
+                "log_likelihood_at_ybar_up_to_constant": (
+                    log_likelihood if log_likelihood is not None else ""),
+                "likelihood_at_ybar_up_to_constant": (
+                    float(np.exp(log_likelihood)) if log_likelihood is not None else ""),
                 "graph_bitmask": map_mask if name == "map_graph_mean_covariance" else "",
                 "graph_edges_one_based": map_edges if name == "map_graph_mean_covariance" else "",
                 "posterior_graph_probability": (

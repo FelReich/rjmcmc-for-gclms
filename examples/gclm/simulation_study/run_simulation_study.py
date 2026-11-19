@@ -1,8 +1,4 @@
-"""Run the cases in settings.py, saving one CSV per independent chain.
-
-From the Code directory:
-    python3 examples/gclm/simulation_study/run_simulation_study.py
-"""
+"""Run the cases in settings.py, saving one CSV per independent chain."""
 
 import argparse
 import csv

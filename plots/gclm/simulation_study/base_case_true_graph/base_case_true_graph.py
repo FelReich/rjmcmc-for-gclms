@@ -1,8 +1,4 @@
-"""Plot the generating graph for the G2, n=800 base case.
-
-Run from the Code directory:
-    python3 plots/gclm/simulation_study/base_case_true_graph/base_case_true_graph.py
-"""
+"""Plot the generating graph for the G2, n=800 base case."""
 
 from pathlib import Path
 import sys

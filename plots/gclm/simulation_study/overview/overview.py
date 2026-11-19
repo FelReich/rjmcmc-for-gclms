@@ -1,8 +1,5 @@
 """Summarize the saved GCLM runs and plot the first chain of each case.
 
-From the Code directory:
-    python3 plots/gclm/simulation_study/overview/overview.py
-
 Each case gets overview.csv (five chains and a pooled row) and trace_plots.pdf.
 Acceptance rates and all summaries use retained, post-burn-in draws only.
 The stored log-likelihood is the total log-likelihood up to a constant.

@@ -69,7 +69,7 @@ class ProposalSettings:
     adaptive_margin: bool
     cycle_moves: bool
     move_weights: tuple[tuple[str, float], ...]
-    sigma_r: float = 1.25
+    sigma_r: float = 0.2
     sigma_eta: float = 0.125
     sigma_b: float = 0.5
     gamma: float = 0.5

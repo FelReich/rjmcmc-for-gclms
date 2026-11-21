@@ -20,7 +20,7 @@ import pandas as pd
 from scipy.linalg import cho_factor, cho_solve, solve_continuous_lyapunov
 
 
-CODE_ROOT = Path(__file__).resolve().parents[4]
+CODE_ROOT = Path(__file__).resolve().parents[5]
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 

@@ -215,7 +215,7 @@ def main():
     cases = get_simulation_cases()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=[case.id for case in cases],
-                        help="Process one case (default: all 11)")
+                        help="Process one case (default: all 12)")
     parser.add_argument("--csv-only", action="store_true",
                         help="Regenerate overview CSVs without replacing trace PDFs")
     args = parser.parse_args()

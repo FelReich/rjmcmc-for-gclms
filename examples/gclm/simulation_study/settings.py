@@ -194,7 +194,12 @@ def _case(
     adaptive_margin: bool = False,
     cycle_moves: bool = False,
 ) -> SimulationCase:
-    suffix = "adaptive_cycle" if cycle_moves else "adaptive" if adaptive_margin else "base"
+    suffix = {
+        (False, False): "base",
+        (True, False): "adaptive",
+        (False, True): "cycle",
+        (True, True): "adaptive_cycle",
+    }[(adaptive_margin, cycle_moves)]
     return SimulationCase(
         id=f"{model.name}_n{n}_lambda{lambda_p:g}_{graph_space}_{suffix}",
         generating_model=model,
@@ -214,7 +219,7 @@ def _five_seeds(first_seed: int) -> tuple[int, ...]:
 
 
 def get_simulation_cases() -> tuple[SimulationCase, ...]:
-    """Return all 11 immutable configurations in the requested order."""
+    """Return all 12 immutable configurations in the requested order."""
     return (
         _case(_G2, 800, 5.0, "general", _five_seeds(2026000)),
         _case(_G2, 800, 5.0, "simple", _five_seeds(2026005)),
@@ -235,6 +240,10 @@ def get_simulation_cases() -> tuple[SimulationCase, ...]:
         _case(
             _G2, 800, 5.0, "general", _five_seeds(2026050),
             adaptive_margin=True, cycle_moves=True,
+        ),
+        _case(
+            _G2, 800, 5.0, "general", _five_seeds(2026055),
+            adaptive_margin=False, cycle_moves=True,
         ),
     )
 

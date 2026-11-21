@@ -181,7 +181,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--case", choices=[case.id for case in cases],
-        help="Run just this configuration (default: all 11)",
+        help="Run just this configuration (default: all 12)",
     )
     parser.add_argument(
         "--resume", action="store_true",

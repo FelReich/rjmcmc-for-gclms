@@ -7,4 +7,4 @@ examples/multiple_change_point_model/test_trace.pdf
 /plots/multiple_change_point_model_plots/green_original_code/Cpt/
 /examples/gclm/simulation_study/runs/*
 !/examples/gclm/simulation_study/runs/.gitkeep
-/plots/gclm/simulation_study/base_general_reciprocal_pair/*
+/plots/gclm/simulation_study/reciprocal_pair_test/*

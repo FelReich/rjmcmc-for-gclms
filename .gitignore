@@ -8,3 +8,5 @@ examples/multiple_change_point_model/test_trace.pdf
 /examples/gclm/simulation_study/runs/*
 !/examples/gclm/simulation_study/runs/.gitkeep
 /plots/gclm/simulation_study/reciprocal_pair_test/*
+/examples/gclm/protein_data/runs/*
+!/examples/gclm/protein_data/runs/.gitkeep

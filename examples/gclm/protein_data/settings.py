@@ -80,6 +80,7 @@ class ProposalSettings:
     adaptive_margin: bool
     cycle_moves: bool
     move_weights: tuple[tuple[str, float], ...]
+    likelihood_informed: bool = False
 
     def as_kwargs(self) -> dict[str, object]:
         return {
@@ -90,6 +91,7 @@ class ProposalSettings:
             "adaptive_margin": self.adaptive_margin,
             "cycle_moves": self.cycle_moves,
             "move_weights": dict(self.move_weights),
+            "likelihood_informed": self.likelihood_informed,
         }
 
 
@@ -108,7 +110,7 @@ class ProteinDataCase:
 
 
 def _case(case_id: str, graph_space: str, cycle_moves: bool,
-          first_seed: int) -> ProteinDataCase:
+          first_seed: int, likelihood_informed: bool = False) -> ProteinDataCase:
     weights = BASE_MOVE_WEIGHTS | (CYCLE_MOVE_WEIGHTS if cycle_moves else {})
     return ProteinDataCase(
         id=case_id,
@@ -118,15 +120,17 @@ def _case(case_id: str, graph_space: str, cycle_moves: bool,
             **PROPOSAL,
             cycle_moves=cycle_moves,
             move_weights=tuple(weights.items()),
+            likelihood_informed=likelihood_informed,
         ),
         chain_seeds=tuple(range(first_seed, first_seed + 5)),
     )
 
 
 def get_simulation_cases() -> tuple[ProteinDataCase, ...]:
-    """Return the simple base and general cycle configurations."""
+    """Return the simple base, simple informed, and general cycle cases."""
     return (
         _case("simple_base", "simple", False, 2026005),
+        _case("simple_li", "simple", False, 2026010, likelihood_informed=True),
         _case("general_cycle", "general", True, 2026055),
     )
 

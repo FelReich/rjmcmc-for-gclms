@@ -162,7 +162,7 @@ def main() -> None:
     cases = get_simulation_cases()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=[case.id for case in cases],
-                        help="Run only this case (default: both cases)")
+                        help="Run only this case (default: all cases)")
     parser.add_argument("--resume", action="store_true",
                         help="Skip verified completed chains and restart interrupted ones")
     args = parser.parse_args()

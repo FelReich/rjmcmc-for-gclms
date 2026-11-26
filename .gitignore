@@ -10,3 +10,5 @@ examples/multiple_change_point_model/test_trace.pdf
 /plots/gclm/simulation_study/reciprocal_pair_test/*
 /examples/gclm/protein_data/runs/*
 !/examples/gclm/protein_data/runs/.gitkeep
+/plots/gclm/protein_data/random
+/examples/gclm/protein_data/remove_protein

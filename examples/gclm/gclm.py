@@ -241,8 +241,7 @@ class GCLMPriorConfig:
 class GCLMProposalConfig:
     """Proposal scales, optional extensions, and move weights.
 
-    Both extensions default to off. Cycle moves are restricted to general
-    graphs; when adaptive_margin is off, they leave eta unchanged.
+    Optional extensions default to off.
     """
 
     sigma_r: float
@@ -252,6 +251,12 @@ class GCLMProposalConfig:
     move_weights: Mapping[str, float] | None = None
     adaptive_margin: bool = False
     cycle_moves: bool = False
+    likelihood_informed: bool = False
+    li_grid_points: int = 11
+    li_inflation: float = 1.5
+    li_xatol: float = 1e-4
+    li_maxiter: int = 40
+    li_max_expansions: int = 1
 
     def __post_init__(self):
         for name in ("sigma_r", "sigma_eta", "sigma_b"):
@@ -267,8 +272,25 @@ class GCLMProposalConfig:
             raise TypeError("adaptive_margin must be a boolean")
         if not isinstance(self.cycle_moves, (bool, np.bool_)):
             raise TypeError("cycle_moves must be a boolean")
+        if not isinstance(self.likelihood_informed, (bool, np.bool_)):
+            raise TypeError("likelihood_informed must be a boolean")
         object.__setattr__(self, "adaptive_margin", bool(self.adaptive_margin))
         object.__setattr__(self, "cycle_moves", bool(self.cycle_moves))
+        object.__setattr__(self, "likelihood_informed", bool(self.likelihood_informed))
+
+        for name, minimum in (("li_grid_points", 3), ("li_maxiter", 1),
+                              ("li_max_expansions", 0)):
+            value = getattr(self, name)
+            if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, (int, np.integer)
+            ) or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+            object.__setattr__(self, name, int(value))
+        for name in ("li_inflation", "li_xatol"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+            object.__setattr__(self, name, float(value))
 
         names = _MOVE_NAMES + (_CYCLE_MOVE_NAMES if self.cycle_moves else ())
         weights = (

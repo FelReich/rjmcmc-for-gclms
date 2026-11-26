@@ -67,9 +67,10 @@ def build_coefficient_proposal(reduced: State, edge, calculations, prior, tuning
         evaluations[value] = float(score)
         return evaluations[value]
 
-    radius = 3.0 * prior.tau # start search over [-3*tau, 3*tau]
+    radius = 3.0 * prior.tau  # Start with [-3*tau, 3*tau].
+    grid = np.linspace(-radius, radius, tuning.li_grid_points)
+    extension = 2.0 * radius
     for expansion in range(tuning.li_max_expansions + 1):
-        grid = np.linspace(-radius, radius, tuning.li_grid_points)
         scores = np.array([objective(value) for value in grid])
         if not np.isfinite(scores).any():
             return fallback
@@ -78,7 +79,19 @@ def build_coefficient_proposal(reduced: State, edge, calculations, prior, tuning
             break
         if expansion == tuning.li_max_expansions:
             return fallback  # No bracketed maximum within the search range.
-        radius *= 2.0
+        # Extend only toward the best endpoint. Keep that point and its old
+        # neighbor so a maximum near the old boundary can still be bracketed.
+        if best == 0:
+            new_points = np.linspace(
+                grid[0] - extension, grid[0], tuning.li_grid_points
+            )[:-1]
+            grid = np.concatenate((new_points, grid[:2]))
+        else:
+            new_points = np.linspace(
+                grid[-1], grid[-1] + extension, tuning.li_grid_points
+            )[1:]
+            grid = np.concatenate((grid[-2:], new_points))
+        extension *= 2.0
 
     try:
         result = minimize_scalar(

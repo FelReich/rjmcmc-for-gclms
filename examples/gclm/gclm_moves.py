@@ -1,4 +1,4 @@
-"""The GCLM moves, with optional adaptive margins and two-edge cycle moves.
+"""GCLM moves with optional informed, adaptive-margin, and cycle proposals.
 
 Each move implements its simplified acceptance ratio in the coordinates
 (G, mu, r, eta, b_G). The sampler supplies move-selection probabilities.
@@ -13,6 +13,9 @@ from examples.gclm.gclm import (
     GCLMCalculations,
     GCLMPriorConfig,
     GCLMProposalConfig,
+)
+from examples.gclm.likelihood_informed import (
+    build_coefficient_proposal, normal_logpdf,
 )
 from examples.gclm.state import State
 from rjmcmc.rjmcmc import BaseMove, Proposal
@@ -36,6 +39,32 @@ class _GCLMMove(BaseMove):
         self.calculations = calculations
         self.prior = prior_config
         self.proposal = proposal_config
+
+    def _li_distribution(self, reduced: State, edge):
+        return build_coefficient_proposal(
+            reduced, edge, self.calculations, self.prior, self.proposal
+        )
+
+    def _remember_li_forward(self, state, proposed, edge, distribution):
+        # One proposal only; no likelihood approximations accumulate with a run.
+        self._li_forward = (state, proposed, edge, distribution)
+
+    def _li_forward_distribution(self, state, proposed, selected_edge,
+                                 reduced, proposed_edge):
+        cached = getattr(self, "_li_forward", None)
+        if (cached is not None and cached[0] is state
+                and cached[1] is proposed and cached[2] == selected_edge):
+            return cached[3]
+        return self._li_distribution(reduced, proposed_edge)
+
+    @staticmethod
+    def _without_edge(state, edge):
+        coefficients = state.coefficients_by_edge
+        del coefficients[edge]
+        return State.from_coefficients(
+            state.graph.remove_edge(edge), state.mu, state.r, state.eta,
+            coefficients,
+        )
 
     def _log_likelihood_ratio(self, state: State, proposed: State) -> float:
         """Return log L(proposed) - log L(state); reject a failed candidate solve."""
@@ -210,7 +239,7 @@ class CoefficientMove(_GCLMMove):
 
 
 class ReversalMove(_GCLMMove):
-    """Reverse one eligible edge and draw its new coefficient from the prior."""
+    """Reverse one eligible edge and propose its new coefficient."""
 
     def available(self, state):
         return bool(state.graph.reversible_edges())
@@ -218,7 +247,12 @@ class ReversalMove(_GCLMMove):
     def propose(self, state: State, rng: np.random.Generator) -> Proposal:
         reversible = state.graph.reversible_edges()
         edge = reversible[int(rng.integers(len(reversible)))]
-        coefficient = rng.normal(0.0, self.prior.tau)
+        if self.proposal.likelihood_informed:
+            reduced = self._without_edge(state, edge)
+            distribution = self._li_distribution(reduced, (edge[1], edge[0]))
+            coefficient = distribution.sample(rng)
+        else:
+            coefficient = rng.normal(0.0, self.prior.tau)
         if not np.isfinite(coefficient):
             return Proposal(state, "reversal")
         graph = state.graph.reverse_edge(edge)
@@ -231,6 +265,8 @@ class ReversalMove(_GCLMMove):
         proposed = self._adjust_margin(state, proposed)
         if proposed is None:
             return Proposal(state, "reversal")
+        if self.proposal.likelihood_informed:
+            self._remember_li_forward(state, proposed, edge, distribution)
         return Proposal(proposed, "reversal", u=edge)
 
     def acceptance(
@@ -238,16 +274,36 @@ class ReversalMove(_GCLMMove):
     ):
         if proposal.u is None:
             return False
-        # Graph and coefficient prior/proposal factors cancel in this space.
+        li_correction = 0.0
+        if self.proposal.likelihood_informed:
+            edge = proposal.u
+            reverse_edge = (edge[1], edge[0])
+            old_coefficient = state.coefficients_by_edge[edge]
+            new_coefficient = proposal.state.coefficients_by_edge[reverse_edge]
+            forward = self._li_forward_distribution(
+                state, proposal.state, edge, self._without_edge(state, edge),
+                reverse_edge,
+            )
+            reverse = self._li_distribution(
+                self._without_edge(proposal.state, reverse_edge), edge
+            )
+            li_correction = (
+                normal_logpdf(new_coefficient, 0.0, self.prior.tau)
+                - normal_logpdf(old_coefficient, 0.0, self.prior.tau)
+                + reverse.logpdf(old_coefficient)
+                - forward.logpdf(new_coefficient)
+            )
+        # With prior proposals the coefficient factors cancel exactly.
         log_ratio = self._log_likelihood_ratio(state, proposal.state)
         log_ratio += self._log_margin_proposal_ratio(
             state.eta, proposal.state.eta
         )
+        log_ratio += li_correction
         return _accept(log_ratio, rng)
 
 
 class BirthMove(_GCLMMove):
-    """Add one admissible edge and draw its coefficient from the prior."""
+    """Add one admissible edge and propose its coefficient."""
 
     def _birth_edges(self, state):
         return state.graph.birth_edges(simple=self.prior.graph_space == "simple")
@@ -258,7 +314,11 @@ class BirthMove(_GCLMMove):
     def propose(self, state: State, rng: np.random.Generator) -> Proposal:
         birth_edges = self._birth_edges(state)
         edge = birth_edges[int(rng.integers(len(birth_edges)))]
-        coefficient = rng.normal(0.0, self.prior.tau)
+        if self.proposal.likelihood_informed:
+            distribution = self._li_distribution(state, edge)
+            coefficient = distribution.sample(rng)
+        else:
+            coefficient = rng.normal(0.0, self.prior.tau)
         if not np.isfinite(coefficient):
             return Proposal(state, "death")
         graph = state.graph.add_edge(edge, simple=self.prior.graph_space == "simple")
@@ -270,6 +330,8 @@ class BirthMove(_GCLMMove):
         proposed = self._adjust_margin(state, proposed)
         if proposed is None:
             return Proposal(state, "birth")
+        if self.proposal.likelihood_informed:
+            self._remember_li_forward(state, proposed, edge, distribution)
         return Proposal(proposed, "death", u=edge)
 
     def acceptance(
@@ -277,12 +339,23 @@ class BirthMove(_GCLMMove):
     ):
         if proposal.u is None:
             return False
+        li_correction = 0.0
+        if self.proposal.likelihood_informed:
+            coefficient = proposal.state.coefficients_by_edge[proposal.u]
+            distribution = self._li_forward_distribution(
+                state, proposal.state, proposal.u, state, proposal.u
+            )
+            li_correction = (
+                normal_logpdf(coefficient, 0.0, self.prior.tau)
+                - distribution.logpdf(coefficient)
+            )
         log_ratio = self._log_likelihood_ratio(state, proposal.state)
         log_ratio += log(self.prior.lambda_p) - log(state.graph.k + 1)
         log_ratio += log(reverse_probability) - log(forward_probability)
         log_ratio += self._log_margin_proposal_ratio(
             state.eta, proposal.state.eta
         )
+        log_ratio += li_correction
         return _accept(log_ratio, rng)
 
 
@@ -311,12 +384,21 @@ class DeathMove(_GCLMMove):
     ):
         if proposal.u is None:
             return False
+        li_correction = 0.0
+        if self.proposal.likelihood_informed:
+            coefficient = state.coefficients_by_edge[proposal.u]
+            reverse = self._li_distribution(proposal.state, proposal.u)
+            li_correction = (
+                reverse.logpdf(coefficient)
+                - normal_logpdf(coefficient, 0.0, self.prior.tau)
+            )
         log_ratio = self._log_likelihood_ratio(state, proposal.state)
         log_ratio += log(state.graph.k) - log(self.prior.lambda_p)
         log_ratio += log(reverse_probability) - log(forward_probability)
         log_ratio += self._log_margin_proposal_ratio(
             state.eta, proposal.state.eta
         )
+        log_ratio += li_correction
         return _accept(log_ratio, rng)
 
 

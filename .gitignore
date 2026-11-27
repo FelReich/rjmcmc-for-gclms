@@ -11,4 +11,5 @@ examples/multiple_change_point_model/test_trace.pdf
 /examples/gclm/protein_data/runs/*
 !/examples/gclm/protein_data/runs/.gitkeep
 /plots/gclm/protein_data/random
-/examples/gclm/protein_data/remove_protein
+/examples/gclm/protein_data/remove_protein/runs/*
+!/examples/gclm/protein_data/remove_protein/runs/.gitkeep

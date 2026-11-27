@@ -32,13 +32,16 @@ class CoefficientProposal:
         return normal_logpdf(value, self.mean, self.standard_deviation)
 
 
-def build_coefficient_proposal(reduced: State, edge, calculations, prior, tuning):
-    """Approximate p(b_edge | other coordinates, graph with edge).
+def build_coefficient_proposal(reduced: State, edge, calculations, prior, tuning,
+                               beta=1.0):
+    """Approximate the coefficient conditional under L^beta times the prior.
 
     A local bounded optimization follows a coarse search. All objective
     evaluations within this construction are memoized. The only persistent
     likelihood cache remains the two-slot cache in GCLMCalculations.
     """
+    if not np.isfinite(beta) or beta <= 0:
+        raise ValueError("beta must be finite and positive")
     if edge not in reduced.graph.birth_edges(simple=prior.graph_space == "simple"):
         raise ValueError("The proposed edge is not admissible from the reduced graph")
 
@@ -58,7 +61,7 @@ def build_coefficient_proposal(reduced: State, edge, calculations, prior, tuning
             candidate = State.from_coefficients(
                 added_graph, reduced.mu, reduced.r, reduced.eta, coefficients
             )
-            score = calculations.log_likelihood(candidate, proposed=True)
+            score = beta * calculations.log_likelihood(candidate, proposed=True)
             score -= 0.5 * (value / prior.tau) ** 2
             if not np.isfinite(score):
                 score = -np.inf

@@ -35,14 +35,19 @@ class _GCLMMove(BaseMove):
         calculations: GCLMCalculations,
         prior_config: GCLMPriorConfig,
         proposal_config: GCLMProposalConfig,
+        beta: float = 1.0,
     ):
+        if not np.isfinite(beta) or beta <= 0:
+            raise ValueError("beta must be finite and positive")
         self.calculations = calculations
         self.prior = prior_config
         self.proposal = proposal_config
+        self.beta = float(beta)
 
     def _li_distribution(self, reduced: State, edge):
         return build_coefficient_proposal(
-            reduced, edge, self.calculations, self.prior, self.proposal
+            reduced, edge, self.calculations, self.prior, self.proposal,
+            beta=self.beta,
         )
 
     def _remember_li_forward(self, state, proposed, edge, distribution):
@@ -73,7 +78,7 @@ class _GCLMMove(BaseMove):
             new = self.calculations.log_likelihood(proposed, proposed=True)
         except np.linalg.LinAlgError:
             return -np.inf
-        return new - old
+        return self.beta * (new - old)
 
     def _adjust_margin(self, state: State, proposed: State) -> State | None:
         """Apply the reversible softplus margin shift, if enabled."""
@@ -114,8 +119,8 @@ class _GCLMMove(BaseMove):
 class MeanMove(_GCLMMove):
     """Draw the entire mean vector from its Gaussian full conditional."""
 
-    def __init__(self, calculations, prior_config, proposal_config):
-        super().__init__(calculations, prior_config, proposal_config)
+    def __init__(self, calculations, prior_config, proposal_config, beta=1.0):
+        super().__init__(calculations, prior_config, proposal_config, beta)
         self._eigen_key = None
         self._eigenvalues = None
         self._eigenvectors = None
@@ -134,7 +139,7 @@ class MeanMove(_GCLMMove):
         eigenvalues = self._eigenvalues
         eigenvectors = self._eigenvectors
         prior_variance = self.prior.s_mu**2
-        n_prior_variance = self.calculations.n * prior_variance
+        n_prior_variance = self.beta * self.calculations.n * prior_variance
         denominator = eigenvalues + n_prior_variance
         mean_weights = n_prior_variance / denominator
         posterior_std = self.prior.s_mu * np.sqrt(eigenvalues / denominator)
